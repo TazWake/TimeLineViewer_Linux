@@ -1,6 +1,8 @@
-# LinuxTimelineViewer
+# LinuxTimelineViewer: ALPHA
 
 LinuxTimelineViewer is a Qt5.15.13-based C++ application for visualising large forensic timeline CSV files in a tabbed GUI. It is designed for efficient handling of multi-GB files and supports both Filesystem and Super timeline formats.
+
+**NOTE**: This is an alpha version of the tool.
 
 ## Features
 
