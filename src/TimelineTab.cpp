@@ -1,19 +1,21 @@
 #include "TimelineTab.h"
 #include <QHeaderView>
 #include <QFont>
+#include <QMenu>
 
 TimelineTab::TimelineTab(const QString& filePath, QWidget* parent)
     : QWidget(parent)
 {
     filterBar = new FilterBar(this);
     model = new TimelineModel(filePath, this);
-    proxyModel = new QSortFilterProxyModel(this);
-    proxyModel->setSourceModel(model);
-    proxyModel->setFilterCaseSensitivity(Qt::CaseInsensitive);
     tableView = new QTableView(this);
-    tableView->setModel(proxyModel);
-    tableView->setSortingEnabled(true);
+    tableView->setModel(model);
+    tableView->setSortingEnabled(false); // full sort requires reading all rows; disabled for large files
     tableView->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
+    tableView->horizontalHeader()->setSectionsMovable(true);
+    tableView->horizontalHeader()->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(tableView->horizontalHeader(), &QHeaderView::customContextMenuRequested,
+            this, &TimelineTab::onHeaderContextMenu);
     statusBar = new QStatusBar(this);
     QVBoxLayout* layout = new QVBoxLayout(this);
     layout->addWidget(filterBar);
@@ -22,6 +24,9 @@ TimelineTab::TimelineTab(const QString& filePath, QWidget* parent)
     setLayout(layout);
     connect(filterBar, &FilterBar::searchRequested, this, &TimelineTab::onSearchRequested);
     connect(tableView, &QTableView::doubleClicked, this, &TimelineTab::onTableDoubleClicked);
+    connect(model, &TimelineModel::searchProgress, this, [this](int done, int total) {
+        statusBar->showMessage(QString("Searching… %1 / %2 rows scanned").arg(done).arg(total));
+    });
     updateFilterBarColumns();
     updateStatus();
 }
@@ -54,32 +59,24 @@ QStringList TimelineTab::columnNames() const
 void TimelineTab::onSearchRequested(const QString& column, const QString& term)
 {
     bool found = search(column, term);
-    if (!found) {
+    if (term.isEmpty()) {
+        updateStatus();
+    } else if (!found) {
         updateStatus("No matches found.");
     } else {
-        updateStatus();
+        updateStatus(QString("Matches: %1").arg(model->filteredRowCount()));
     }
 }
 
 bool TimelineTab::search(const QString& column, const QString& term)
 {
     if (term.isEmpty()) {
-        proxyModel->setFilterFixedString("");
+        model->clearFilter();
         return false;
     }
-    if (column == "All Columns") {
-        proxyModel->setFilterKeyColumn(-1);
-        proxyModel->setFilterRegExp(QRegExp(term, Qt::CaseInsensitive, QRegExp::FixedString));
-        return proxyModel->rowCount() > 0;
-    } else {
-        int col = model->columnIndex(column);
-        if (col >= 0) {
-            proxyModel->setFilterKeyColumn(col);
-            proxyModel->setFilterFixedString(term);
-            return proxyModel->rowCount() > 0;
-        }
-    }
-    return false;
+    statusBar->showMessage("Searching…");
+    model->applyFilter(column, term);
+    return model->filteredRowCount() > 0;
 }
 
 void TimelineTab::setFontSize(int pointSize)
@@ -112,12 +109,32 @@ void TimelineTab::onTableDoubleClicked(const QModelIndex& index)
     detailWindow->show();
 }
 
+void TimelineTab::onHeaderContextMenu(const QPoint& pos)
+{
+    QMenu menu(this);
+    menu.setTitle("Show / hide columns");
+
+    for (int col = 0; col < model->columnCount(); ++col) {
+        QString name = model->headerData(col, Qt::Horizontal, Qt::DisplayRole).toString();
+        QAction* action = menu.addAction(name);
+        action->setCheckable(true);
+        action->setChecked(!tableView->isColumnHidden(col));
+        // Capture col by value; QMenu::exec() is synchronous so the lambda
+        // lifetime is safe.
+        connect(action, &QAction::toggled, this, [this, col](bool visible) {
+            tableView->setColumnHidden(col, !visible);
+        });
+    }
+
+    menu.exec(tableView->horizontalHeader()->mapToGlobal(pos));
+}
+
 void TimelineTab::updateStatus(const QString& msg)
 {
     if (!msg.isEmpty()) {
         statusBar->showMessage(msg);
     } else {
-        statusBar->showMessage(QString("Rows: %1").arg(proxyModel->rowCount()));
+        statusBar->showMessage(QString("Rows: %1").arg(model->rowCount()));
     }
 }
 

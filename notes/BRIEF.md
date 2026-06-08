@@ -1,6 +1,6 @@
-# Linux Timeline Viewer – Developer Build & Implementation Guide
+# 🗂 Linux Timeline Viewer – Developer Build & Implementation Guide
 
-## Project Overview
+## 📌 Project Overview
 
 **LinuxTimelineViewer** is a Qt-based C++ application for visualizing large forensic timeline CSV files in a tabbed GUI.
 
@@ -18,7 +18,7 @@
 
 ---
 
-## Folder Structure
+## 📁 Folder Structure
 
 ```
 linuxtimelineviewer/
@@ -43,7 +43,7 @@ linuxtimelineviewer/
 
 ---
 
-## Build System Setup
+## 🛠 Build System Setup
 
 **Requirements:**
 - C++17
@@ -73,7 +73,7 @@ make -j$(nproc)
 
 ---
 
-## Application Structure
+## 📐 Application Structure
 
 ### 1. `main.cpp`
 - Initializes `QApplication`
@@ -131,7 +131,7 @@ make -j$(nproc)
 
 ---
 
-## Behavior Details
+## 🔍 Behavior Details
 
 ### File Type Detection
 - In `TimelineParser` or `TimelineModel` constructor:
@@ -157,7 +157,7 @@ make -j$(nproc)
 
 ---
 
-## Test Artifacts
+## 🧪 Test Artifacts
 
 Place example files in `data/test_files/`:
 - `FILESYSTEM.txt` → from your example with macb and orphaned files
@@ -170,7 +170,7 @@ Place example files in `data/test_files/`:
 
 ---
 
-## Code Conventions
+## 📝 Code Conventions
 
 - Use C++17, avoid boost
 - Use Qt’s containers (`QString`, `QVector`, `QMap`)
@@ -179,9 +179,24 @@ Place example files in `data/test_files/`:
 
 ---
 
-## Known Limits (v1)
+## 🚧 Known Limits (v1)
 
 - Only `.csv`/`.txt` supported
 - Search is one-column at a time
 - No export/save function
 - No timeline alignment or graphical chart
+
+---
+
+## ✅ Summary: Key Developer Tasks
+
+| Task                | File(s)                       | Notes                                 |
+|---------------------|------------------------------|---------------------------------------|
+| Set up project + CMake | `CMakeLists.txt`           | Static Qt, release build              |
+| Create main window  | `main.cpp`, `AppWindow`      | Menubar, tabbed interface             |
+| Implement tab view  | `TimelineTab`                | Holds table + filter bar              |
+| Implement model     | `TimelineModel`              | Efficient file-backed CSV reader      |
+| Detect format       | `TimelineModel`, `TimelineParser` | Validate columns                 |
+| Create filter/search| `FilterBar`                  | Connect to model via proxy            |
+| Handle JSON/XML     | `JsonXmlFormatter`           | Pretty-print inside table cell        |
+

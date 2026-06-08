@@ -6,6 +6,9 @@
 #include <QDebug>
 #include <QDir>
 #include <QStandardPaths>
+#include <QElapsedTimer>
+#include <QCoreApplication>
+#include <QColor>
 
 TimelineModel::TimelineModel(const QString& filePath, QObject* parent)
     : QAbstractTableModel(parent), filePath(filePath), timelineType(Unknown), file(filePath), unsavedChanges(false)
@@ -34,7 +37,9 @@ TimelineModel::~TimelineModel() { file.close(); }
 void TimelineModel::detectFormat()
 {
     QMutexLocker locker(&fileMutex);
-    
+    QElapsedTimer timer;
+    timer.start();
+
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         timelineType = Unknown;
         return;
@@ -57,61 +62,75 @@ void TimelineModel::detectFormat()
     else
         timelineType = Unknown;
     file.seek(0);
+    qDebug() << "TimelineModel: format detection took" << timer.elapsed() << "ms, type:"
+             << (timelineType == Filesystem ? "Filesystem" :
+                 timelineType == Super      ? "Super"      : "Unknown");
 }
 
 void TimelineModel::buildLineIndex()
 {
     QMutexLocker locker(&fileMutex);
-    
+    QElapsedTimer timer;
+    timer.start();
+    qDebug() << "TimelineModel: building line index for" << filePath;
+
     lineOffsets.clear();
     if (!file.isOpen()) {
         if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
             throw std::runtime_error("Failed to open file for reading");
         }
     }
-    
+
     qint64 offset = 0;
     QTextStream in(&file);
     QString line;
-    
-    // Skip header
+
     line = in.readLine();
-    if (line.isNull()) {
+    if (line.isNull())
         throw std::runtime_error("File appears to be empty or corrupted");
-    }
     offset += line.toUtf8().size() + 1;
-    
+
     int lineCount = 0;
     while (!in.atEnd()) {
-        // Check line count limit
-        if (lineCount >= MAX_LINE_COUNT) {
+        if (lineCount >= MAX_LINE_COUNT)
             throw std::runtime_error("File exceeds maximum line count limit (10 million lines)");
-        }
-        
-        // Check memory usage for index
-        qint64 indexMemory = lineOffsets.size() * sizeof(qint64);
-        if (indexMemory > MAX_INDEX_MEMORY) {
+
+        if (lineOffsets.size() * static_cast<qint64>(sizeof(qint64)) > MAX_INDEX_MEMORY)
             throw std::runtime_error("File index exceeds memory limit (500MB)");
-        }
-        
+
         lineOffsets.append(offset);
         line = in.readLine();
-        
-        if (line.isNull()) {
-            break; // End of file
-        }
-        
+        if (line.isNull())
+            break;
+
         offset += line.toUtf8().size() + 1;
-        lineCount++;
+        ++lineCount;
+
+        // Every 50 000 lines, briefly yield to the event loop so the UI stays
+        // responsive. ExcludeUserInputEvents prevents re-entrancy issues.
+        if (lineCount % 50000 == 0) {
+            locker.unlock();
+            QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+            locker.relock();
+            qDebug() << "TimelineModel: indexed" << lineCount << "lines so far...";
+        }
     }
-    
+
     file.seek(0);
-    qDebug() << "Indexed" << lineCount << "lines, index memory usage:" << (lineOffsets.size() * sizeof(qint64)) << "bytes";
+    qDebug() << "TimelineModel: indexed" << lineCount << "lines in" << timer.elapsed()
+             << "ms, index memory:" << (lineOffsets.size() * static_cast<qint64>(sizeof(qint64))) << "bytes";
 }
 
 int TimelineModel::rowCount(const QModelIndex&) const
 {
-    return lineOffsets.size();
+    return m_isFiltered ? m_filteredRows.size() : lineOffsets.size();
+}
+
+int TimelineModel::toSourceRow(int viewRow) const
+{
+    if (m_isFiltered && viewRow >= 0 && viewRow < m_filteredRows.size())
+        return m_filteredRows[viewRow];
+    return viewRow;
 }
 
 int TimelineModel::columnCount(const QModelIndex&) const
@@ -121,40 +140,39 @@ int TimelineModel::columnCount(const QModelIndex&) const
 
 QVariant TimelineModel::data(const QModelIndex& index, int role) const
 {
-    if (!index.isValid())
+    if (!index.isValid() || index.row() < 0 || index.row() >= rowCount())
         return QVariant();
-    
+
+    const int srcRow = toSourceRow(index.row());
+
     // Handle tag column for Super timelines
-    if (timelineType == Super && index.column() == 7) { // tag column
-        if (role == Qt::CheckStateRole) {
-            return taggedRows.contains(index.row()) ? Qt::Checked : Qt::Unchecked;
-        }
-        if (role == Qt::DisplayRole) {
-            return QVariant(); // Don't show text for checkbox column
-        }
+    if (timelineType == Super && index.column() == 7) {
+        if (role == Qt::CheckStateRole)
+            return taggedRows.contains(srcRow) ? Qt::Checked : Qt::Unchecked;
+        if (role == Qt::DisplayRole)
+            return QVariant();
     }
-    
-    // Handle background color for tagged rows
-    if (role == Qt::BackgroundRole && taggedRows.contains(index.row())) {
-        return QColor(240, 240, 240); // Light gray background for tagged rows
-    }
-    
+
+    // Background tint for tagged rows
+    if (role == Qt::BackgroundRole && taggedRows.contains(srcRow))
+        return QColor(240, 240, 240);
+
     if (role != Qt::DisplayRole)
         return QVariant();
-    
+
     QMutexLocker locker(&fileMutex);
-    
+
     if (!file.isOpen()) {
         if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
             qWarning() << "Failed to open file for reading";
             return QVariant();
         }
     }
-    
-    if (index.row() < 0 || index.row() >= lineOffsets.size())
+
+    if (srcRow < 0 || srcRow >= lineOffsets.size())
         return QVariant();
-        
-    if (!file.seek(lineOffsets[index.row()])) {
+
+    if (!file.seek(lineOffsets[srcRow])) {
         qWarning() << "Failed to seek to file position";
         return QVariant();
     }
@@ -200,10 +218,9 @@ bool TimelineModel::setData(const QModelIndex& index, const QVariant& value, int
 {
     if (!index.isValid() || timelineType != Super || index.column() != 7)
         return false;
-        
+
     if (role == Qt::CheckStateRole) {
-        bool checked = value.toInt() == Qt::Checked;
-        setRowTagged(index.row(), checked);
+        setRowTagged(toSourceRow(index.row()), value.toInt() == Qt::Checked);
         return true;
     }
     return false;
@@ -234,22 +251,24 @@ bool TimelineModel::isRowTagged(int row) const
     return taggedRows.contains(row);
 }
 
-void TimelineModel::setRowTagged(int row, bool tagged)
+void TimelineModel::setRowTagged(int sourceRow, bool tagged)
 {
-    if (tagged) {
-        if (!taggedRows.contains(row)) {
-            taggedRows.insert(row);
-            unsavedChanges = true;
-            emit dataChanged(createIndex(row, 0), createIndex(row, columnCount() - 1));
-            emit dataChanged(unsavedChanges);
-        }
-    } else {
-        if (taggedRows.contains(row)) {
-            taggedRows.remove(row);
-            unsavedChanges = true;
-            emit dataChanged(createIndex(row, 0), createIndex(row, columnCount() - 1));
-            emit dataChanged(unsavedChanges);
-        }
+    bool changed = false;
+    if (tagged && !taggedRows.contains(sourceRow)) {
+        taggedRows.insert(sourceRow);
+        changed = true;
+    } else if (!tagged && taggedRows.contains(sourceRow)) {
+        taggedRows.remove(sourceRow);
+        changed = true;
+    }
+
+    if (changed) {
+        unsavedChanges = true;
+        // Notify the view using the view-row index, not the source row.
+        int viewRow = m_isFiltered ? m_filteredRows.indexOf(sourceRow) : sourceRow;
+        if (viewRow >= 0)
+            emit dataChanged(createIndex(viewRow, 0), createIndex(viewRow, columnCount() - 1));
+        emit tagsModified(unsavedChanges);
     }
 }
 
@@ -284,7 +303,7 @@ bool TimelineModel::saveTaggedRows()
     }
     
     unsavedChanges = false;
-    emit dataChanged(unsavedChanges);
+    emit tagsModified(unsavedChanges);
     return true;
 }
 
@@ -341,10 +360,9 @@ QString TimelineModel::sanitizeFileName(const QString& fileName) const
 {
     QString sanitized = fileName;
     
-    // Remove path traversal sequences
-    sanitized.remove(QRegExp("[.]{2,}"));  // Remove .. sequences
-    sanitized.remove(QRegExp("[\\/]"));   // Remove path separators
-    sanitized.remove(QRegExp("[<>:\"|?*]"));  // Remove invalid filename chars
+    sanitized.remove(QRegularExpression(R"([.]{2,})"));   // Remove .. sequences
+    sanitized.remove(QRegularExpression(R"([/\\])"));    // Remove path separators
+    sanitized.remove(QRegularExpression(R"([<>:"|?*])"));// Remove invalid filename chars
     
     // Limit filename length
     if (sanitized.length() > 200) {
@@ -367,6 +385,73 @@ bool TimelineModel::ensureTagDirectory() const
         return dir.mkpath(tagDir);
     }
     return true;
+}
+
+bool TimelineModel::isFiltered() const { return m_isFiltered; }
+
+int TimelineModel::filteredRowCount() const
+{
+    return m_isFiltered ? m_filteredRows.size() : -1;
+}
+
+void TimelineModel::clearFilter()
+{
+    if (!m_isFiltered)
+        return;
+    beginResetModel();
+    m_filteredRows.clear();
+    m_isFiltered = false;
+    endResetModel();
+}
+
+void TimelineModel::applyFilter(const QString& column, const QString& term)
+{
+    if (term.isEmpty()) {
+        clearFilter();
+        return;
+    }
+
+    const int colIdx = (column == "All Columns") ? -1 : columnIndex(column);
+    const QString lowerTerm = term.toLower();
+    const int total = lineOffsets.size();
+    QVector<int> matches;
+
+    QMutexLocker locker(&fileMutex);
+    if (!file.isOpen()) {
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+            return;
+    }
+
+    for (int i = 0; i < total; ++i) {
+        file.seek(lineOffsets[i]);
+        const QString line = QString::fromUtf8(file.readLine().trimmed());
+
+        try {
+            const QStringList fields = FileUtils::parseCsvLine(line);
+            bool match = false;
+            if (colIdx < 0) {
+                for (const QString& f : fields) {
+                    if (f.toLower().contains(lowerTerm)) { match = true; break; }
+                }
+            } else if (colIdx < fields.size()) {
+                match = fields[colIdx].toLower().contains(lowerTerm);
+            }
+            if (match)
+                matches.append(i);
+        } catch (...) {}
+
+        if (i % 10000 == 0) {
+            locker.unlock();
+            emit searchProgress(i, total);
+            QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+            locker.relock();
+        }
+    }
+
+    beginResetModel();
+    m_filteredRows = matches;
+    m_isFiltered = true;
+    endResetModel();
 }
 
 QString TimelineModel::getTagFilePath() const

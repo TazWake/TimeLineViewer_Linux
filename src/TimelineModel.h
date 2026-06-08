@@ -7,7 +7,7 @@
 #include <QSet>
 #include <QStandardPaths>
 #include <QDir>
-#include <QRegExp>
+#include <QRegularExpression>
 #include <QMutex>
 #include <QMutexLocker>
 #include <memory>
@@ -39,8 +39,15 @@ public:
     bool saveTaggedRows();
     QString getFilePath() const;
 
+    // Filter (search) — scans the file with periodic processEvents() calls
+    void applyFilter(const QString& column, const QString& term);
+    void clearFilter();
+    bool isFiltered() const;
+    int  filteredRowCount() const; // -1 when no filter is active
+
 signals:
-    void dataChanged(bool hasUnsavedChanges);
+    void tagsModified(bool hasUnsavedChanges);
+    void searchProgress(int linesScanned, int totalLines);
 
 private:
     // Security limits
@@ -55,6 +62,12 @@ private:
     mutable QMutex fileMutex; // Protect file operations
     QSet<int> taggedRows; // Set of tagged row indices
     bool unsavedChanges;
+
+    // Search filter state
+    QVector<int> m_filteredRows; // source-row indices that match current search
+    bool m_isFiltered = false;
+    int toSourceRow(int viewRow) const; // maps view row → source row
+
     void detectFormat();
     void buildLineIndex();
     void loadTaggedRows();

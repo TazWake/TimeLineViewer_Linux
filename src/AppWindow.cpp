@@ -8,11 +8,13 @@ AppWindow::AppWindow(QWidget* parent)
     : QMainWindow(parent)
 {
     tabs = new QTabWidget(this);
+    tabs->setTabsClosable(true);
     setCentralWidget(tabs);
     setupMenu();
     setWindowTitle("Linux Timeline Viewer");
     resize(1200, 800);
     connect(tabs, &QTabWidget::currentChanged, this, &AppWindow::onTabChanged);
+    connect(tabs, &QTabWidget::tabCloseRequested, this, &AppWindow::closeTab);
 }
 
 AppWindow::~AppWindow() {}
@@ -25,13 +27,18 @@ void AppWindow::setupMenu()
     saveAction = new QAction("&Save", this);
     saveAction->setShortcut(QKeySequence::Save);
     saveAction->setEnabled(false);
+    closeTabAction = new QAction("&Close Tab", this);
+    closeTabAction->setShortcut(QKeySequence::Close);
+    closeTabAction->setEnabled(false);
     exitAction = new QAction("E&xit", this);
     fileMenu->addAction(openAction);
     fileMenu->addAction(saveAction);
+    fileMenu->addAction(closeTabAction);
     fileMenu->addSeparator();
     fileMenu->addAction(exitAction);
     connect(openAction, &QAction::triggered, this, &AppWindow::openFile);
     connect(saveAction, &QAction::triggered, this, &AppWindow::saveFile);
+    connect(closeTabAction, &QAction::triggered, this, &AppWindow::closeCurrentTab);
     connect(exitAction, &QAction::triggered, this, &QWidget::close);
 
     QMenu* viewMenu = menuBar->addMenu("&View");
@@ -61,7 +68,12 @@ void AppWindow::setupMenu()
 
 void AppWindow::openFile()
 {
-    QString fileName = QFileDialog::getOpenFileName(this, "Open Timeline File", QString(), "Timeline Files (*.csv *.txt)");
+    // DontUseNativeDialog avoids the GNOME portal file-chooser, which can
+    // block the event loop for 10-15 seconds on Wayland/XCB sessions.
+    QString fileName = QFileDialog::getOpenFileName(
+        this, "Open Timeline File", QString(),
+        "Timeline Files (*.csv *.txt)", nullptr,
+        QFileDialog::DontUseNativeDialog);
     if (fileName.isEmpty())
         return;
     
@@ -96,7 +108,7 @@ void AppWindow::openFile()
         updateWindowTitle();
         
         // Connect to model's dataChanged signal to update save action and window title
-        connect(tab->getModel(), &TimelineModel::dataChanged, this, [this](bool hasUnsaved) {
+        connect(tab->getModel(), &TimelineModel::tagsModified, this, [this](bool hasUnsaved) {
             updateWindowTitle();
             saveAction->setEnabled(hasUnsaved);
         });
@@ -123,6 +135,41 @@ void AppWindow::saveFile()
     } else {
         QMessageBox::warning(this, "Save Error", "Failed to save tags. Please check file permissions.");
     }
+}
+
+void AppWindow::closeCurrentTab()
+{
+    closeTab(tabs->currentIndex());
+}
+
+void AppWindow::closeTab(int index)
+{
+    if (index < 0 || index >= tabs->count())
+        return;
+
+    TimelineTab* tab = qobject_cast<TimelineTab*>(tabs->widget(index));
+    if (!tab)
+        return;
+
+    if (tab->hasUnsavedChanges()) {
+        QMessageBox::StandardButton result = QMessageBox::question(
+            this,
+            "Unsaved Changes",
+            QString("'%1' has unsaved tag changes. Save before closing?").arg(tabs->tabText(index)),
+            QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel,
+            QMessageBox::Save
+        );
+        if (result == QMessageBox::Cancel)
+            return;
+        if (result == QMessageBox::Save && !tab->saveChanges()) {
+            QMessageBox::warning(this, "Save Error", "Failed to save tags. Tab not closed.");
+            return;
+        }
+    }
+
+    tabs->removeTab(index);
+    delete tab;
+    updateWindowTitle();
 }
 
 void AppWindow::increaseFontSize() { currentFontSize = qMin(currentFontSize + 1, 32); applyFontAndLineHeight(); }
@@ -256,8 +303,10 @@ void AppWindow::onTabChanged(int index)
         if (tab) {
             saveAction->setEnabled(tab->hasUnsavedChanges());
         }
+        closeTabAction->setEnabled(true);
     } else {
         saveAction->setEnabled(false);
+        closeTabAction->setEnabled(false);
     }
 }
 

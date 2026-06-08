@@ -3,7 +3,6 @@
 #include <QTableView>
 #include <QStatusBar>
 #include <QVBoxLayout>
-#include <QSortFilterProxyModel>
 #include "FilterBar.h"
 #include "TimelineModel.h"
 #include "FieldDetailWindow.h"
@@ -28,13 +27,13 @@ public:
 private slots:
     void onSearchRequested(const QString& column, const QString& term);
     void onTableDoubleClicked(const QModelIndex& index);
+    void onHeaderContextMenu(const QPoint& pos);
 
 private:
     FilterBar* filterBar;
     QTableView* tableView;
     QStatusBar* statusBar;
     TimelineModel* model;
-    QSortFilterProxyModel* proxyModel;
     int fontSize = 10;
     int lineHeight = 20;
     void updateStatus(const QString& msg = QString());

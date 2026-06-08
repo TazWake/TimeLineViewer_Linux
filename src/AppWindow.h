@@ -26,6 +26,8 @@ public:
 private slots:
     void openFile();
     void saveFile();
+    void closeTab(int index);
+    void closeCurrentTab();
     void increaseFontSize();
     void decreaseFontSize();
     void resetFontAndLineHeight();
@@ -41,6 +43,7 @@ private:
     QTabWidget* tabs;
     QAction* openAction;
     QAction* saveAction;
+    QAction* closeTabAction;
     QAction* exitAction;
     QAction* fontIncAction;
     QAction* fontDecAction;

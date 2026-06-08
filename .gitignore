@@ -1,3 +1,6 @@
+# Large timeline data files - test files should use .txt, not .csv
+data/test_files/*.csv
+
 # Prerequisites
 *.d
 
