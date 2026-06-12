@@ -2,6 +2,8 @@
 
 LinuxTimelineViewer is a Qt6-based C++ application for visualizing large forensic timeline CSV files in a tabbed GUI. It is designed for efficient handling of multi-GB files and supports both Filesystem and Plaso Super timeline formats.
 
+**Note**: The main issue with this is trying to get a GUI application to work on varied platforms. The next phase will be to convert this to an Electron (or Tauri) app to make it more portable. This will be in a new project repo to allow development of both to continue. 
+
 ## Features
 
 - Multi-tab viewing (one file per tab)
